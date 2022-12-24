@@ -95,14 +95,18 @@ def main(unused_argv):
             obs = env.reset()
             info = None
             reward = 0
+            n_steps = 0
+            infos = []
             for _ in range(task.max_steps):
                 act = agent.act(obs, info, goal)
                 obs, reward, done, info = env.step(act)
                 total_reward += reward
+                n_steps += 1
+                infos.append(info)
                 print(f"Total Reward: {total_reward} Done: {done}")
                 if done:
                     break
-            results.append((total_reward, info))
+            results.append((total_reward, n_steps, infos, n_steps))
 
             # Save results.
             if not tf.io.gfile.exists(
