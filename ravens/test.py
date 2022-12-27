@@ -107,7 +107,6 @@ def main(unused_argv):
                 if done:
                     break
             results.append((total_reward, n_steps, infos))
-
             # Save results.
             if not tf.io.gfile.exists(
                 os.path.join(
