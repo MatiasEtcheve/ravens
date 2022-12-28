@@ -26,17 +26,27 @@ from ravens import agents, dataset, tasks
 from ravens.environments.environment import Environment
 
 flags.DEFINE_string("root_dir", ".", "")
-flags.DEFINE_string("data_dir", ".", "")
-flags.DEFINE_string("assets_root", "./assets/", "")
+flags.DEFINE_string("data_dir", ".", "Directory to dataset.")
+flags.DEFINE_string("assets_root", "./assets/", "Path to assets")
 flags.DEFINE_bool("disp", False, "")
 flags.DEFINE_bool("shared_memory", False, "")
-flags.DEFINE_string("task", "hanoi", "")
-flags.DEFINE_string("agent", "transporter", "")
-flags.DEFINE_integer("n_demos", 100, "")
-flags.DEFINE_integer("n_steps", 40000, "")
-flags.DEFINE_integer("n_runs", 1, "")
-flags.DEFINE_integer("gpu", 0, "")
+flags.DEFINE_string("task", "hanoi", "task name")
+flags.DEFINE_string("agent", "transporter", "Agent type")
+flags.DEFINE_integer("n_demos", 100, "Number of training demos used.")
+flags.DEFINE_integer("n_steps", 40000, "Maximum number of training steps.")
+flags.DEFINE_integer("n_runs", 1, "Number of training. Done sequentially.")
+flags.DEFINE_integer("gpu", 0, "Index of used GPU")
 flags.DEFINE_integer("gpu_limit", None, "")
+flags.DEFINE_string(
+    "depth_config_file",
+    None,
+    "Path to the config file if depth estimation is done.",
+)
+flags.DEFINE_string(
+    "depth_checkpoint_file",
+    None,
+    "Path to the checkpoint pretrained model if depth estimation is done.",
+)
 
 FLAGS = flags.FLAGS
 
@@ -64,7 +74,11 @@ def main(unused_argv):
     task.mode = "test"
 
     # Load test dataset.
-    ds = dataset.Dataset(os.path.join(FLAGS.data_dir, f"{FLAGS.task}-test"))
+    ds = dataset.Dataset(
+        os.path.join(FLAGS.data_dir, f"{FLAGS.task}-test"),
+        FLAGS.depth_config_file,
+        FLAGS.depth_checkpoint_file,
+    )
 
     # Run testing for each training run.
     for train_run in range(FLAGS.n_runs):
@@ -107,24 +121,30 @@ def main(unused_argv):
                 if done:
                     break
             results.append((total_reward, n_steps, infos))
+
             # Save results.
+            folder_name = (
+                "predictions"
+                if FLAGS.depth_config_file is None
+                else "prections-estimated-depth"
+            )
             if not tf.io.gfile.exists(
                 os.path.join(
                     FLAGS.root_dir,
-                    "predictions",
+                    folder_name,
                     name,
                 )
             ):
                 tf.io.gfile.makedirs(
                     os.path.join(
                         FLAGS.root_dir,
-                        "predictions",
+                        folder_name,
                         name,
                     )
                 )
             with tf.io.gfile.GFile(
                 os.path.join(
-                    FLAGS.root_dir, "predictions", name, f"{name}-{FLAGS.n_steps}.pkl"
+                    FLAGS.root_dir, folder_name, name, f"{name}-{FLAGS.n_steps}.pkl"
                 ),
                 "wb",
             ) as f:
