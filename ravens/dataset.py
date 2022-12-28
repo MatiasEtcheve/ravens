@@ -17,9 +17,24 @@
 
 import os
 import pickle
+import shutil
+import warnings
+from pathlib import Path
+from pprint import pprint
 
+import matplotlib.pyplot as plt
+import mmcv
 import numpy as np
 import tensorflow as tf
+import torch
+from depth.apis import multi_gpu_test, single_gpu_test
+from depth.datasets import build_dataloader, build_dataset
+from depth.datasets.pipelines import Compose
+from depth.models import build_depther
+from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
+from mmcv.runner import get_dist_info, init_dist, load_checkpoint, wrap_fp16_model
+from mmcv.utils import DictAction
+from torchvision import transforms
 
 from ravens import tasks
 from ravens.tasks import cameras
@@ -37,12 +52,43 @@ TASK_NAMES = sorted(TASK_NAMES)[::-1]
 class Dataset:
     """A simple image dataset class."""
 
-    def __init__(self, path):
+    def __init__(self, path, depth_config_file=None, depth_checkpoint_file=None):
         """A simple RGB-D image dataset."""
         self.path = path
         self.sample_set = []
         self.max_seed = -1
         self.n_episodes = 0
+
+        if depth_config_file is not None:
+            assert (
+                depth_checkpoint_file is not None
+            ), "You need to precise a checkpoint file for depth estimation"
+        if depth_checkpoint_file is not None:
+            assert (
+                depth_config_file is not None
+            ), "You need to precise a config file for depth estimation"
+
+        if depth_config_file is not None and depth_checkpoint_file is not None:
+            import torch
+            from torchvision import transforms
+
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.preprocess = transforms.Compose(
+                [
+                    transforms.Normalize(
+                        mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375]
+                    )
+                ]
+            )
+            self.estimate_depth = True
+            cfg = mmcv.Config.fromfile(depth_config_file)
+            self.model = build_depther(cfg.model, test_cfg=cfg.get("test_cfg"))
+            load_checkpoint(self.model, str(depth_checkpoint_file), map_location="cpu")
+            self.model = self.model.to(self.device)
+            self.model.eval()
+
+        else:
+            self.estimate_depth = False
 
         # Track existing dataset if it exists.
         color_path = os.path.join(self.path, "action")
@@ -107,7 +153,7 @@ class Dataset:
           seed: random seed used to initialize the episode.
         """
 
-        def load_field(episode_id, field, fname):
+        def load_field(episode_id, field, fname, color_images=None):
 
             # Check if sample is in cache.
             if cache:
@@ -117,9 +163,49 @@ class Dataset:
                 else:
                     self._cache[episode_id] = {}
 
-            # Load sample from files.
-            path = os.path.join(self.path, field)
-            data = pickle.load(open(os.path.join(path, fname), "rb"))
+            torch.cuda.set_per_process_memory_fraction(0.1, 0)
+
+            # if loaded with color images, it means we need to infer depth
+            if color_images is not None:
+                image_shape = color_images[0, 0].shape
+                assert tuple(image_shape) == (
+                    480,
+                    640,
+                    3,
+                ), f"Expecting depth images of size (480, 640, 3) got {tuple(image_shape)}"
+                batch = (
+                    torch.Tensor(color_images)
+                    .reshape((-1, *list(image_shape)))
+                    .permute(0, 3, 1, 2)
+                    .to(self.device)
+                )
+                img_metas = [
+                    {
+                        "pad_shape": tuple(_.shape),
+                        "img_shape": tuple(_.shape),
+                        "ori_shape": tuple(_.shape),
+                        "scale_factor": 1,
+                        "flip": False,
+                        "img_norm_cfg": {
+                            "mean": _.mean(axis=(1, 2)),
+                            "std": _.mean(axis=(1, 2)),
+                        },
+                    }
+                    for _ in batch
+                ]
+                self.model.eval()
+                with torch.no_grad():
+                    output_batch = self.model.forward(
+                        [self.preprocess(batch)], [img_metas], return_loss=False
+                    )
+                data = np.concatenate(output_batch, axis=0).reshape(
+                    color_images.shape[:-1]
+                )
+            else:
+                # Load sample from files.
+                path = os.path.join(self.path, field)
+                data = pickle.load(open(os.path.join(path, fname), "rb"))
+
             if cache:
                 self._cache[episode_id][field] = data
             return data
@@ -133,7 +219,7 @@ class Dataset:
 
                 # Load data.
                 color = load_field(episode_id, "color", fname)
-                depth = load_field(episode_id, "depth", fname)
+                depth = load_field(episode_id, "depth", fname, color_images=color)
                 action = load_field(episode_id, "action", fname)
                 reward = load_field(episode_id, "reward", fname)
                 info = load_field(episode_id, "info", fname)
