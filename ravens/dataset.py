@@ -38,6 +38,7 @@ from torchvision import transforms
 
 from ravens import tasks
 from ravens.tasks import cameras
+from ravens.utils.depth_inference import infer_depth, load_model
 
 # See transporter.py, regression.py, dummy.py, task.py, etc.
 PIXEL_SIZE = 0.003125
@@ -68,24 +69,11 @@ class Dataset:
                 depth_config_file is not None
             ), "You need to precise a config file for depth estimation"
         if depth_config_file is not None and depth_checkpoint_file is not None:
-            import torch
-            from torchvision import transforms
-
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.preprocess = transforms.Compose(
-                [
-                    transforms.Normalize(
-                        mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375]
-                    )
-                ]
-            )
             self.estimate_depth = True
-            cfg = mmcv.Config.fromfile(depth_config_file)
-            self.model = build_depther(cfg.model, test_cfg=cfg.get("test_cfg"))
-            load_checkpoint(self.model, str(depth_checkpoint_file), map_location="cpu")
-            self.model = self.model.to(self.device)
-            self.model.eval()
-
+            self.device, self.preprocess, self.model = load_model(
+                depth_config_file,
+                depth_checkpoint_file,
+            )
         else:
             self.estimate_depth = False
 
@@ -152,47 +140,6 @@ class Dataset:
           seed: random seed used to initialize the episode.
         """
 
-        def infer_depth(color_images):
-            image_shape = color_images[0, 0].shape
-            assert tuple(image_shape) == (
-                480,
-                640,
-                3,
-            ), f"Expecting depth images of size (480, 640, 3) got {tuple(image_shape)}"
-            batch = (
-                torch.Tensor(color_images)
-                .reshape((-1, *list(image_shape)))
-                .permute(0, 3, 1, 2)
-                .to(self.device)
-            )
-            img_metas = [
-                {
-                    "pad_shape": tuple(_.shape),
-                    "img_shape": tuple(_.shape),
-                    "ori_shape": tuple(_.shape),
-                    "scale_factor": 1,
-                    "flip": False,
-                    "img_norm_cfg": {
-                        "mean": _.mean(axis=(1, 2)),
-                        "std": _.mean(axis=(1, 2)),
-                    },
-                }
-                for _ in batch
-            ]
-            self.model.eval()
-            with torch.no_grad():
-                output_batch = self.model.forward(
-                    [self.preprocess(batch)], [img_metas], return_loss=False
-                )
-            data = np.concatenate(output_batch, axis=0).reshape(color_images.shape[:-1])
-            data_min = np.min(data, axis=(2, 3))
-            data_max = np.max(data, axis=(2, 3))
-            data = (
-                255
-                * (data - data_min[:, :, None, None])
-                / (data_max[:, :, None, None] - data_min[:, :, None, None])
-            )
-            return data
 
         def load_field(episode_id, field, fname, color_images=None):
 
@@ -203,8 +150,6 @@ class Dataset:
                         return self._cache[episode_id][field]
                 else:
                     self._cache[episode_id] = {}
-
-            torch.cuda.set_per_process_memory_fraction(0.3, 0)
 
             # if loaded with color images, it means we need to infer depth
             if self.estimate_depth and color_images is not None:

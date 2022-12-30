@@ -34,29 +34,15 @@
 
 import os
 import pickle
-import shutil
-import warnings
-from pathlib import Path
-from pprint import pprint
 
-import matplotlib.pyplot as plt
-import mmcv
 import numpy as np
 import tensorflow as tf
-import torch
 from absl import app, flags
-from depth.apis import multi_gpu_test, single_gpu_test
-from depth.datasets import build_dataloader, build_dataset
-from depth.datasets.pipelines import Compose
-from depth.models import build_depther
-from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
-from mmcv.runner import get_dist_info, init_dist, load_checkpoint, wrap_fp16_model
-from mmcv.utils import DictAction
-from torchvision import transforms
 
 from ravens import agents, dataset, tasks
 from ravens.environments.environment import Environment
 from ravens.tasks import cameras
+from ravens.utils.depth_inference import infer_depth, load_model
 
 flags.DEFINE_string("root_dir", ".", "")
 flags.DEFINE_string("data_dir", ".", "Directory to dataset.")
@@ -82,63 +68,6 @@ flags.DEFINE_string(
 )
 
 FLAGS = flags.FLAGS
-
-
-def load_model(depth_config_file, depth_checkpoint_file):
-    torch.cuda.set_per_process_memory_fraction(0.1, 0)
-    
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    preprocess = transforms.Compose(
-        [
-            transforms.Normalize(
-                mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375]
-            )
-        ]
-    )
-    cfg = mmcv.Config.fromfile(depth_config_file)
-    model = build_depther(cfg.model, test_cfg=cfg.get("test_cfg"))
-    load_checkpoint(model, str(depth_checkpoint_file), map_location="cpu")
-    model = model.to(device)
-    model.eval()
-    return device, preprocess, model
-
-
-def infer_depth(color_images, device, preprocess, model):
-    image_shape = color_images[0].shape
-    assert tuple(image_shape) == (
-        480,
-        640,
-        3,
-    ), f"Expecting depth images of size (480, 640, 3) got {tuple(image_shape)}"
-    batch = torch.Tensor(color_images).permute(0, 3, 1, 2).to(device)
-    img_metas = [
-        {
-            "pad_shape": tuple(_.shape),
-            "img_shape": tuple(_.shape),
-            "ori_shape": tuple(_.shape),
-            "scale_factor": 1,
-            "flip": False,
-            "img_norm_cfg": {
-                "mean": _.mean(axis=(1, 2)),
-                "std": _.mean(axis=(1, 2)),
-            },
-        }
-        for _ in batch
-    ]
-    model.eval()
-    with torch.no_grad():
-        output_batch = model.forward(
-            [preprocess(batch)], [img_metas], return_loss=False
-        )
-    data = np.concatenate(output_batch, axis=0).reshape(color_images.shape[:-1])
-    data_min = np.min(data, axis=(1, 2))
-    data_max = np.max(data, axis=(1, 2))
-    data = (
-        255
-        * (data - data_min[:, None, None])
-        / (data_max[:, None, None] - data_min[:, None, None])
-    )
-    return data
 
 
 def main(unused_argv):
@@ -201,6 +130,8 @@ def main(unused_argv):
             env.seed(seed)
             env.set_task(task)
             obs = env.reset()
+
+            # if depth inference, replace it in the observation
             if ds.estimate_depth:
                 obs["depth"] = list(
                     infer_depth(
@@ -214,12 +145,15 @@ def main(unused_argv):
             for _ in range(task.max_steps):
                 act = agent.act(obs, info, goal)
                 obs, reward, done, info = env.step(act)
+
+                # if depth inference, replace it in the observation
                 if ds.estimate_depth:
                     obs["depth"] = list(
                         infer_depth(
                             np.stack(obs["color"], axis=0), device, preprocess, model
                         )
                     )
+
                 total_reward += reward
                 n_steps += 1
                 infos.append(info)
@@ -229,29 +163,17 @@ def main(unused_argv):
             results.append((total_reward, n_steps, infos))
 
             # Save results.
-            folder_name = (
+            folder_name = os.path.join(
+                FLAGS.root_dir,
                 "predictions"
                 if FLAGS.depth_config_file is None
-                else "prections-estimated-depth"
+                else "prections-estimated-depth",
+                name,
             )
-            if not tf.io.gfile.exists(
-                os.path.join(
-                    FLAGS.root_dir,
-                    folder_name,
-                    name,
-                )
-            ):
-                tf.io.gfile.makedirs(
-                    os.path.join(
-                        FLAGS.root_dir,
-                        folder_name,
-                        name,
-                    )
-                )
+            if not tf.io.gfile.exists(folder_name):
+                tf.io.gfile.makedirs(folder_name)
             with tf.io.gfile.GFile(
-                os.path.join(
-                    FLAGS.root_dir, folder_name, name, f"{name}-{FLAGS.n_steps}.pkl"
-                ),
+                os.path.join(folder_name, f"{name}-{FLAGS.n_steps}.pkl"),
                 "wb",
             ) as f:
                 pickle.dump(results, f)
