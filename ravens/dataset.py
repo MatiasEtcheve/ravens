@@ -67,7 +67,6 @@ class Dataset:
             assert (
                 depth_config_file is not None
             ), "You need to precise a config file for depth estimation"
-
         if depth_config_file is not None and depth_checkpoint_file is not None:
             import torch
             from torchvision import transforms
@@ -153,6 +152,48 @@ class Dataset:
           seed: random seed used to initialize the episode.
         """
 
+        def infer_depth(color_images):
+            image_shape = color_images[0, 0].shape
+            assert tuple(image_shape) == (
+                480,
+                640,
+                3,
+            ), f"Expecting depth images of size (480, 640, 3) got {tuple(image_shape)}"
+            batch = (
+                torch.Tensor(color_images)
+                .reshape((-1, *list(image_shape)))
+                .permute(0, 3, 1, 2)
+                .to(self.device)
+            )
+            img_metas = [
+                {
+                    "pad_shape": tuple(_.shape),
+                    "img_shape": tuple(_.shape),
+                    "ori_shape": tuple(_.shape),
+                    "scale_factor": 1,
+                    "flip": False,
+                    "img_norm_cfg": {
+                        "mean": _.mean(axis=(1, 2)),
+                        "std": _.mean(axis=(1, 2)),
+                    },
+                }
+                for _ in batch
+            ]
+            self.model.eval()
+            with torch.no_grad():
+                output_batch = self.model.forward(
+                    [self.preprocess(batch)], [img_metas], return_loss=False
+                )
+            data = np.concatenate(output_batch, axis=0).reshape(color_images.shape[:-1])
+            data_min = np.min(data, axis=(2, 3))
+            data_max = np.max(data, axis=(2, 3))
+            data = (
+                255
+                * (data - data_min[:, :, None, None])
+                / (data_max[:, :, None, None] - data_min[:, :, None, None])
+            )
+            return data
+
         def load_field(episode_id, field, fname, color_images=None):
 
             # Check if sample is in cache.
@@ -163,44 +204,17 @@ class Dataset:
                 else:
                     self._cache[episode_id] = {}
 
-            torch.cuda.set_per_process_memory_fraction(0.1, 0)
+            torch.cuda.set_per_process_memory_fraction(0.3, 0)
 
             # if loaded with color images, it means we need to infer depth
-            if color_images is not None:
-                image_shape = color_images[0, 0].shape
-                assert tuple(image_shape) == (
-                    480,
-                    640,
-                    3,
-                ), f"Expecting depth images of size (480, 640, 3) got {tuple(image_shape)}"
-                batch = (
-                    torch.Tensor(color_images)
-                    .reshape((-1, *list(image_shape)))
-                    .permute(0, 3, 1, 2)
-                    .to(self.device)
-                )
-                img_metas = [
-                    {
-                        "pad_shape": tuple(_.shape),
-                        "img_shape": tuple(_.shape),
-                        "ori_shape": tuple(_.shape),
-                        "scale_factor": 1,
-                        "flip": False,
-                        "img_norm_cfg": {
-                            "mean": _.mean(axis=(1, 2)),
-                            "std": _.mean(axis=(1, 2)),
-                        },
-                    }
-                    for _ in batch
-                ]
-                self.model.eval()
-                with torch.no_grad():
-                    output_batch = self.model.forward(
-                        [self.preprocess(batch)], [img_metas], return_loss=False
-                    )
-                data = np.concatenate(output_batch, axis=0).reshape(
-                    color_images.shape[:-1]
-                )
+            if self.estimate_depth and color_images is not None:
+                data = infer_depth(color_images)
+                # data = np.zeros(color_images.shape[:-1])
+
+                # from PIL import Image
+
+                # im = Image.fromarray(data[0, 0], mode="F").convert("RGB")
+                # im.save(f"{fname.split('.')[0]}.jpeg")
             else:
                 # Load sample from files.
                 path = os.path.join(self.path, field)

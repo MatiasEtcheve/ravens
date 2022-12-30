@@ -63,7 +63,7 @@ class TransporterAgent:
         assert img.shape == self.in_shape, img.shape
         return img
 
-    def get_sample(self, dataset, augment=True):
+    def get_sample(self, dataset, augment=False):
         """Get a dataset sample.
 
         Args:
