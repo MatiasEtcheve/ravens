@@ -42,7 +42,6 @@ from absl import app, flags
 from ravens import agents, dataset, tasks
 from ravens.environments.environment import Environment
 from ravens.tasks import cameras
-from ravens.utils.depth_inference import infer_depth, load_model
 
 flags.DEFINE_string("root_dir", ".", "")
 flags.DEFINE_string("data_dir", ".", "Directory to dataset.")
@@ -99,6 +98,8 @@ def main(unused_argv):
         FLAGS.depth_checkpoint_file,
     )
     if ds.estimate_depth:
+        from ravens.utils.depth_inference import load_model
+
         device, preprocess, model = load_model(
             FLAGS.depth_config_file,
             FLAGS.depth_checkpoint_file,
@@ -133,6 +134,8 @@ def main(unused_argv):
 
             # if depth inference, replace it in the observation
             if ds.estimate_depth:
+                from ravens.utils.depth_inference import infer_depth
+
                 obs["depth"] = list(
                     infer_depth(
                         np.stack(obs["color"], axis=0), device, preprocess, model

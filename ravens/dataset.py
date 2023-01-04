@@ -26,11 +26,6 @@ import matplotlib.pyplot as plt
 import mmcv
 import numpy as np
 import tensorflow as tf
-import torch
-from depth.apis import multi_gpu_test, single_gpu_test
-from depth.datasets import build_dataloader, build_dataset
-from depth.datasets.pipelines import Compose
-from depth.models import build_depther
 from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
 from mmcv.runner import get_dist_info, init_dist, load_checkpoint, wrap_fp16_model
 from mmcv.utils import DictAction
@@ -38,7 +33,6 @@ from torchvision import transforms
 
 from ravens import tasks
 from ravens.tasks import cameras
-from ravens.utils.depth_inference import infer_depth, load_model
 
 # See transporter.py, regression.py, dummy.py, task.py, etc.
 PIXEL_SIZE = 0.003125
@@ -69,6 +63,8 @@ class Dataset:
                 depth_config_file is not None
             ), "You need to precise a config file for depth estimation"
         if depth_config_file is not None and depth_checkpoint_file is not None:
+            from ravens.utils.depth_inference import load_model
+
             self.estimate_depth = True
             self.device, self.preprocess, self.model = load_model(
                 depth_config_file,
@@ -140,7 +136,6 @@ class Dataset:
           seed: random seed used to initialize the episode.
         """
 
-
         def load_field(episode_id, field, fname, color_images=None):
 
             # Check if sample is in cache.
@@ -153,6 +148,8 @@ class Dataset:
 
             # if loaded with color images, it means we need to infer depth
             if self.estimate_depth and color_images is not None:
+                from ravens.utils.depth_inference import infer_depth
+
                 data = infer_depth(color_images)
                 # data = np.zeros(color_images.shape[:-1])
 
