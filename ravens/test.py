@@ -170,7 +170,7 @@ def main(unused_argv):
                 FLAGS.root_dir,
                 "predictions"
                 if FLAGS.depth_config_file is None
-                else "prections-estimated-depth",
+                else "predictions-estimated-depth",
                 name,
             )
             if not tf.io.gfile.exists(folder_name):

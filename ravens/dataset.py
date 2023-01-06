@@ -26,6 +26,7 @@ import matplotlib.pyplot as plt
 import mmcv
 import numpy as np
 import tensorflow as tf
+import torch
 from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
 from mmcv.runner import get_dist_info, init_dist, load_checkpoint, wrap_fp16_model
 from mmcv.utils import DictAction
@@ -47,29 +48,20 @@ TASK_NAMES = sorted(TASK_NAMES)[::-1]
 class Dataset:
     """A simple image dataset class."""
 
-    def __init__(self, path, depth_config_file=None, depth_checkpoint_file=None):
+    def __init__(self, path, depth_checkpoint_file=None):
         """A simple RGB-D image dataset."""
         self.path = path
         self.sample_set = []
         self.max_seed = -1
         self.n_episodes = 0
 
-        if depth_config_file is not None:
-            assert (
-                depth_checkpoint_file is not None
-            ), "You need to precise a checkpoint file for depth estimation"
         if depth_checkpoint_file is not None:
-            assert (
-                depth_config_file is not None
-            ), "You need to precise a config file for depth estimation"
-        if depth_config_file is not None and depth_checkpoint_file is not None:
-            from ravens.utils.depth_inference import load_model
+            from adabins.infer import InferenceHelper
 
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.estimate_depth = True
-            self.device, self.preprocess, self.model = load_model(
-                depth_config_file,
-                depth_checkpoint_file,
-            )
+            self.infer_helper = InferenceHelper(depth_checkpoint_file, dataset="nyu")
+
         else:
             self.estimate_depth = False
 
@@ -150,7 +142,7 @@ class Dataset:
             if self.estimate_depth and color_images is not None:
                 from ravens.utils.depth_inference import infer_depth
 
-                data = infer_depth(color_images)
+                data = infer_depth(color_images, self.device, self.infer_helper)
                 # data = np.zeros(color_images.shape[:-1])
 
                 # from PIL import Image

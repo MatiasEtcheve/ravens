@@ -17,6 +17,7 @@
 
 import os
 
+import matplotlib
 import numpy as np
 import tensorflow as tf
 
@@ -56,6 +57,15 @@ class TransporterAgent:
         cmap, hmap = utils.get_fused_heightmap(
             obs, self.cam_config, self.bounds, self.pix_size
         )
+        # matplotlib.image.imsave(
+        #     "cmap.png",
+        #     cmap,
+        # )
+        # matplotlib.image.imsave(
+        #     "hmap.png",
+        #     hmap,
+        # )
+        # raise ValueError
         img = np.concatenate(
             (cmap, hmap[Ellipsis, None], hmap[Ellipsis, None], hmap[Ellipsis, None]),
             axis=2,
@@ -170,6 +180,7 @@ class TransporterAgent:
 
         # Get heightmap from RGB-D images.
         img = self.get_image(obs)
+        full_img = self.get_full_image(obs)
 
         # Attention model forward pass.
         pick_conf = self.attention.forward(img)
@@ -186,7 +197,7 @@ class TransporterAgent:
         p1_theta = argmax[2] * (2 * np.pi / place_conf.shape[2])
 
         # Pixels to end effector poses.
-        hmap = img[:, :, 3]
+        hmap = full_img[:, :, 3]
         p0_xyz = utils.pix_to_xyz(p0_pix, hmap, self.bounds, self.pix_size)
         p1_xyz = utils.pix_to_xyz(p1_pix, hmap, self.bounds, self.pix_size)
         p0_xyzw = utils.eulerXYZ_to_quatXYZW((0, 0, -p0_theta))

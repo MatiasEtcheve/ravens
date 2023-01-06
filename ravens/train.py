@@ -38,11 +38,6 @@ flags.DEFINE_integer("interval", 1000, "Run validation every X iteration")
 flags.DEFINE_integer("gpu", 0, "Index of used GPU")
 flags.DEFINE_integer("gpu_limit", None, "")
 flags.DEFINE_string(
-    "depth_config_file",
-    None,
-    "Path to the config file if depth estimation is done.",
-)
-flags.DEFINE_string(
     "depth_checkpoint_file",
     None,
     "Path to the checkpoint pretrained model if depth estimation is done.",
@@ -69,12 +64,10 @@ def main(unused_argv):
     # Load train and test datasets.
     train_dataset = Dataset(
         os.path.join(FLAGS.data_dir, f"{FLAGS.task}-train"),
-        FLAGS.depth_config_file,
         FLAGS.depth_checkpoint_file,
     )
     test_dataset = Dataset(
         os.path.join(FLAGS.data_dir, f"{FLAGS.task}-test"),
-        FLAGS.depth_config_file,
         FLAGS.depth_checkpoint_file,
     )
 
