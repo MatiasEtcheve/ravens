@@ -56,11 +56,6 @@ flags.DEFINE_integer("n_runs", 1, "Number of training. Done sequentially.")
 flags.DEFINE_integer("gpu", 0, "Index of used GPU")
 flags.DEFINE_integer("gpu_limit", None, "")
 flags.DEFINE_string(
-    "depth_config_file",
-    None,
-    "Path to the config file if depth estimation is done.",
-)
-flags.DEFINE_string(
     "depth_checkpoint_file",
     None,
     "Path to the checkpoint pretrained model if depth estimation is done.",
@@ -94,16 +89,15 @@ def main(unused_argv):
     # Load test dataset.
     ds = dataset.Dataset(
         os.path.join(FLAGS.data_dir, f"{FLAGS.task}-test"),
-        FLAGS.depth_config_file,
         FLAGS.depth_checkpoint_file,
     )
-    if ds.estimate_depth:
-        from ravens.utils.depth_inference import load_model
 
-        device, preprocess, model = load_model(
-            FLAGS.depth_config_file,
-            FLAGS.depth_checkpoint_file,
-        )
+    if ds.estimate_depth:
+        import torch
+        from adabins.infer import InferenceHelper
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        infer_helper = InferenceHelper(FLAGS.depth_checkpoint_file, dataset="nyu")
     # Run testing for each training run.
     for train_run in range(FLAGS.n_runs):
         name = f"{FLAGS.task}-{FLAGS.agent}-{FLAGS.n_demos}-{train_run}"
@@ -136,11 +130,10 @@ def main(unused_argv):
             if ds.estimate_depth:
                 from ravens.utils.depth_inference import infer_depth
 
-                obs["depth"] = list(
-                    infer_depth(
-                        np.stack(obs["color"], axis=0), device, preprocess, model
-                    )
+                obs["depth"] = tuple(
+                    infer_depth(np.stack(obs["color"], axis=0), device, infer_helper)
                 )
+
             info = None
             reward = 0
             n_steps = 0
@@ -151,9 +144,9 @@ def main(unused_argv):
 
                 # if depth inference, replace it in the observation
                 if ds.estimate_depth:
-                    obs["depth"] = list(
+                    obs["depth"] = tuple(
                         infer_depth(
-                            np.stack(obs["color"], axis=0), device, preprocess, model
+                            np.stack(obs["color"], axis=0), device, infer_helper
                         )
                     )
 
@@ -169,7 +162,7 @@ def main(unused_argv):
             folder_name = os.path.join(
                 FLAGS.root_dir,
                 "predictions"
-                if FLAGS.depth_config_file is None
+                if FLAGS.depth_checkpoint_file is None
                 else "predictions-estimated-depth",
                 name,
             )
